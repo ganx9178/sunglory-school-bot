@@ -3,7 +3,7 @@
 奕阳教育·学校动态监控 - GitHub Actions 云端版
 触发: 每天 01:30 UTC (北京 09:30) + 07:00 UTC (北京 15:00)
 搜索: Bing 网页（免费，无需 API Key）
-推送: 飞书 Webhook
+推送: 飞书 Webhook (卡片格式)
 """
 import json, os, sys, hashlib, base64, hmac, time, re, urllib.request, urllib.parse, html
 from datetime import datetime, timezone, timedelta
@@ -56,7 +56,6 @@ def passes_time(text):
     return False
 
 def search_bing_web(query, max_results=5):
-    """Bing 网页搜索（GitHub Actions 云服务器 IP，免费）"""
     results = []
     try:
         encoded = urllib.parse.quote(query)
@@ -162,33 +161,62 @@ for sd in results.values():
     for cat in cat_counts:
         cat_counts[cat] += len(sd.get(cat, []))
 
-# ========== 重点发现 ==========
-findings = []
-for cat in ["招标", "科技赛事", "科技新闻", "人事变动", "公众号推文"]:
-    cat_items = []
-    for sn, sd in results.items():
-        for item in sd.get(cat, []):
-            t = item["title"][:30]
-            d = item.get("pub_date", "")
-            u = item.get("url", "")
-            tag = f"（{d}）" if d else ""
-            cat_items.append(f"[{sn}] {tag}{t} — {u}" if u else f"[{sn}] {tag}{t}")
-    findings.extend(cat_items[:3])
-findings = findings[:15]
-findings_str = "\n".join(f"{i+1}. {f}" for i, f in enumerate(findings))
-
-# ========== 飞书推送 ==========
+# ========== 飞书推送（卡片格式，与原始 run_morning_batch.py 一致） ==========
 timestamp = str(int(time.time()))
 string_to_sign = timestamp + "\n" + FEISHU_SECRET
 hmac_code = hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
 sign = base64.b64encode(hmac_code).decode("utf-8")
 
+card_elements = []
+
+# 顶部统计
+summary = "**日期**: " + report_date + "（" + batch_label + "）"
+summary += "\n\n**本批监控**: " + str(len(batch_schools)) + "所 | **24h更新**: " + str(schools_with_news) + "条 | **3个月更新**: " + str(total_items) + "条"
+card_elements.append({"tag": "markdown", "content": summary})
+
+# 近24h区块
+if total_items > 0:
+    card_elements.append({"tag": "markdown", "content": "**[24h] 近24小时更新（" + str(total_items) + "条）**"})
+    for cat in ["招标", "科技赛事", "科技新闻", "人事变动", "公众号推文"]:
+        cat_items = []
+        for sn, sd in results.items():
+            for item in sd.get(cat, []):
+                school = sn
+                title = item["title"]
+                date = item.get("pub_date", "")
+                url = item.get("url", "")
+                tag = "(" + date + ")" if date else ""
+                link = " [原文](" + url + ")" if url else ""
+                cat_items.append("**" + school + "**" + tag + " " + title + link)
+        if cat_items:
+            detail_text = "\n".join(cat_items[:8])
+            card_elements.append({"tag": "markdown", "content": "### " + cat + "（" + str(len(cat_items)) + "条）\n\n" + detail_text})
+else:
+    card_elements.append({"tag": "markdown", "content": "**[24h] 近24小时无学校更新信息**"})
+
 msg = {
     "timestamp": timestamp,
     "sign": sign,
-    "msg_type": "text",
-    "content": {
-        "text": f"📊 奕阳教育·学校动态监控（{batch_label}批次）\n\n日期: {report_date}\n本批监控: {len(batch_schools)}所 | 有动态: {schools_with_news}所\n信息总数: {total_items}条\n\n📁 招标: {cat_counts['招标']} | 🏆 赛事: {cat_counts['科技赛事']} | 📰 科技: {cat_counts['科技新闻']} | 👤 人事: {cat_counts['人事变动']} | 📱 推文: {cat_counts['公众号推文']}\n\n🔍 重点发现:\n{findings_str if findings_str else '暂无新动态'}"
+    "msg_type": "interactive",
+    "card": {
+        "header": {
+            "title": {"tag": "plain_text", "content": "奕阳教育·学校动态监控（" + batch_label + "批次）"},
+            "template": "blue"
+        },
+        "elements": [
+            *card_elements,
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "查看完整报告"},
+                        "type": "primary",
+                        "url": ""
+                    }
+                ]
+            }
+        ]
     }
 }
 
